@@ -1,8 +1,7 @@
 #!/usr/bin/env python
 #
-# Nagios custom NRPE plugin to monitor active instances in ELB at regular
-# intervals. Example usage:
-# $ ./elb_health.py -a '<API_KEY>' -s '<API_SECRET>' -l <ELB_NAME>
+# Nagios custom NRPE plugin to check ELB health at regular intervals
+# Author: Rohit Gupta - @rohit01
 #
 
 import boto
@@ -10,154 +9,92 @@ import boto.ec2
 import boto.ec2.elb
 import sys
 import os
-from optparse import OptionParser
+import logging
+import optparse
 
 
-AUTHOR = "Rohit Gupta - @rohit01"
-VERSION = "1.0"
+__version__ = 0.1
+VERSION = """Version: %s, Author: Rohit Gupta - @rohit01""" % __version__
+DESCRIPTION = """Nagios plugin for monitor ELB instance health count"""
 OPTIONS = {
-    'a': "apikey;AWS Credential - API key",
-    's': "apisecret;AWS Credential - API Secret key",
-    'l': "loadbalancer;AWS Elastic Load Balancer name to be checked."
-         " Mandatory",
-    'r': "region;AWS region name in which load balancer is hosted. Default:"
-         " us-east-1",
-    'w': "warning;Health warning level (in %). Default: 99",
-    'c': "critical;Health critical level (in %). Default: 50",
-    'W': "warningcount;Healthy instance count warning level. Default: 0",
-    'C': "criticalcount;Healthy instance count critical level. Default: 0",
+    "aws_access_key"    : "AWS access key",
+    "aws_secret_access" : "AWS secret key",
+    "loadbalancer"      : "AWS Elastic Load Balancer name to be checked",
+    "region"            : "AWS region name in which load balancer is hosted. Default: us-east-1",
+    "warning"           : "Health warning level (in %). Default: 99",
+    "critical"          : "Health critical level (in %). Default: 50",
+    "warningcount"      : "Healthy instance count warning level. Default: 1",
+    "criticalcount"     : "Healthy instance count critical level. Default: 0",
 }
-FLAG_OPTIONS = {
-    'v': "version;Display version no. and Sample usage",
+USAGE = "%s --aws_access_key=<value> --aws_secret_access=<value> " \
+    "--loadbalancer=<value> [other options]"  % os.path.basename(__file__)
+
+DEFAULTS = {
+    "region"        : 'us-east-1',
+    "warning"       : 99,
+    "critical"      : 50,
+    "warningcount"  : 1,
+    "criticalcount" : 0,
 }
 
-# Nagios exit status values
+# Global variables
 ST_OK = 0
 ST_WR = 1
 ST_CR = 2
 ST_UK = 3
-
-# Argument Global variables
-apikey = None
-apisecret = None
-loadbalancer = None
-region = 'us-east-1'
-warning = 99
-critical = 50
-warningcount = 0
-criticalcount = 0
-
-# Global variables (Declare & Set default)
 exit_status = ST_OK
 reason_for_alert_list = []
 health_states = {}
 DISPLAY_KEY_ORDER = ['Total', 'InService']
+logger = logging.getLogger("ELB health check")
+logger.setLevel(logging.WARNING)
+# Logging in syslog (/var/log/syslog)
+handler = logging.handlers.SysLogHandler(address='/dev/log')
+logger.addHandler(handler)
 
 
-def parse_options():
-    parser = OptionParser()
-    for option, description in OPTIONS.items():
-        shortopt = '-%s' % (option)
-        longopt = '--%s' % (description.split(';')[0])
-        keyname = description.split(';')[0]
-        help = ''
-        if len(description.split(';')) > 1:
-            help = description.split(';')[1]
-        parser.add_option(shortopt, longopt, dest=keyname, help=help)
-    for option, description in FLAG_OPTIONS.items():
-        shortopt = '-%s' % (option)
-        longopt = '--%s' % (description.split(';')[0])
-        keyname = description.split(';')[0]
-        help = ''
-        if len(description.split(';')) > 1:
-            help = description.split(';')[1]
-        parser.add_option(shortopt, longopt, dest=keyname,
-                          action="store_true", help=help)
-    (options, args) = parser.parse_args()
-    return options
+def parse_options(options, description=None, usage=None, version=None,
+        defaults=None):
+    parser = optparse.OptionParser(description=description, usage=usage,
+                                   version=version)
+    for keyname, description in options.items():
+        longopt = '--%s' % keyname
+        parser.add_option(longopt, dest=keyname, help=description)
+    option_args, _ = parser.parse_args()
+    arguments = {}
+    for keyname in options.keys():
+        arguments[keyname] = eval("option_args.%s" % keyname)
+    if defaults:
+        for k, v in arguments.items():
+            if (not v) and (k in defaults):
+                arguments[k] = defaults[k]
+    return arguments
 
 
-def validate_and_use_arguments_passed(arguments=None):
-    global loadbalancer
-    global region
-    global warning
-    global critical
-    global warningcount
-    global criticalcount
-    global apikey
-    global apisecret
-    if arguments is None:
-        arguments = parse_options()
-    if arguments.version is True:
-        message_list = []
-        message_list.append('Version: %s, Author: %s' % (VERSION, AUTHOR))
-        message_list.append('Sample usage:')
-        message_list.append("$ ./%s -a '<API_KEY>' -s '<API_SECRET>' -l"
-            " <ELB_NAME>" % os.path.basename(__file__))
-        message_list.append("OK - ELB: my_elb. Total: 3; InService: 3")
-        exit_formalalities('\n'.join(message_list), ST_UK)
-    # Set global variables
-    if arguments.loadbalancer is not None:
-        loadbalancer = arguments.loadbalancer
-    if arguments.region is not None:
-        region = arguments.region
-    if arguments.warning is not None:
-        warning = arguments.warning
-    if arguments.critical is not None:
-        critical = arguments.critical
-    if arguments.warningcount is not None:
-        warningcount = arguments.warningcount
-    if arguments.criticalcount is not None:
-        criticalcount = arguments.criticalcount
-    if arguments.apikey is not None:
-        apikey = arguments.apikey
-    if arguments.apisecret is not None:
-        apisecret = arguments.apisecret
-    # Validate
-    if apikey is None:
-        message = 'Mandatory option -a/--apikey not specified'
+def validate_arguments(arguments=None):
+    # Validate Mandatory options
+    for k, v in arguments.items():
+        if (not v) and (k not in DEFAULTS):
+            message = "Mandatory option --%s is missing. Use -h/--help for" \
+                " details" % k
+            exit_formalalities(message, ST_UK)
+    # Integer arguments
+    for key in 'warning', 'critical', 'warningcount', 'criticalcount':
+        try:
+            arguments[key] = int(arguments[key])
+            if arguments[key] < 0:
+                raise ValueError()
+        except ValueError:
+            message = "Option --%s invalid. Value %s must be a positive " \
+                "integer" % (key, arguments[key])
+            exit_formalalities(message, ST_UK)
+    if arguments["warning"] < arguments["critical"]:
+        message = "option --warning(%s) must be greater than --critical(%s)" \
+             % (arguments["warning"], arguments["critical"])
         exit_formalalities(message, ST_UK)
-    if apisecret is None:
-        message = 'Mandatory option -s/--apisecret not specified'
-        exit_formalalities(message, ST_UK)
-    if loadbalancer is None:
-        message = 'Mandatory option -l/--loadbalancer not specified'
-        exit_formalalities(message, ST_UK)
-    if region is None:
-        message = 'Script Error: Default value for -r/--region not set'
-        exit_formalalities(message, ST_UK)
-    if warning is None:
-        message = 'Script Error: Default value for -w/--warning not set'
-        exit_formalalities(message, ST_UK)
-    if critical is None:
-        message = 'Script Error: Default value for -c/--critical not set'
-        exit_formalalities(message, ST_UK)
-    if warningcount is None:
-        message = 'Script Error: Default value for -W/--warningcount not set'
-        exit_formalalities(message, ST_UK)
-    if criticalcount is None:
-        message = 'Script Error: Default value for -C/--criticalcount not set'
-        exit_formalalities(message, ST_UK)
-    warning = convert_into_integer(warning, '-w/--warning')
-    critical = convert_into_integer(critical, '-c/--critical')
-    if warning < critical:
-        message = 'warning: %s must be greater than critical: %s' % (warning,
-                                                                     critical)
-        exit_formalalities(message, ST_UK)
-    warningcount = convert_into_integer(warningcount, '-W/--warningcount')
-    criticalcount = convert_into_integer(criticalcount, '-C/--criticalcount')
-    if warningcount < criticalcount:
-        message = 'warningcount: %s must be greater than criticalcount: %s' \
-                  % (warningcount, criticalcount)
-        exit_formalalities(message, ST_UK)
-
-
-def convert_into_integer(value, option_name):
-    try:
-        return int(value)
-    except ValueError:
-        message = "Invalid value: '%s' passed for option: %s. Value must be" \
-                  " a integer" % (value, option_name)
+    if arguments["warningcount"] < arguments["criticalcount"]:
+        message = "option --warningcount(%s) must be greater than --criticalcount(%s)" \
+             % (arguments["warningcount"], arguments["criticalcount"])
         exit_formalalities(message, ST_UK)
 
 
@@ -166,31 +103,34 @@ def exit_formalalities(message, exit_status):
     sys.exit(exit_status)
 
 
-def get_elb_connection(region_name):
+def get_elb_connection(region, aws_access_key, aws_secret_access):
     try:
-        conn = boto.ec2.elb.connect_to_region(region_name=region_name,
-                                              aws_access_key_id=apikey,
-                                              aws_secret_access_key=apisecret)
-    except Exception, e:
+        conn = boto.ec2.elb.connect_to_region(
+            region_name=region,
+            aws_access_key_id=aws_access_key, 
+            aws_secret_access_key=aws_secret_access
+        )
+    except Exception as e:
         print e
-        message = "Exception occured in creating AWS ELB connection object"
+        message = "Exception occured: %s" % e.message
         exit_formalalities(message, ST_CR)
     return conn
 
 
-def fetch_load_balancer():
-    conn = get_elb_connection(region)
+def fetch_load_balancer(arguments):
+    conn = get_elb_connection(arguments['region'],arguments['aws_access_key'],
+        arguments['aws_secret_access'])
     try:
-        elb_list = conn.get_all_load_balancers(load_balancer_names=
-                                               [loadbalancer])
+        elb_list = conn.get_all_load_balancers(
+            load_balancer_names=[arguments['loadbalancer']])
         return elb_list[0]
-    except boto.exception.BotoServerError:
-        message = "Exception occured in fetching AWS ELB: '%s' details in" \
-                  " region: '%s'" % (loadbalancer, region)
+    except boto.exception.BotoServerError as e:
+        message = "Exception occured while fetching AWS ELB: %s, region: %s." \
+            " Message: %s" % (arguments['loadbalancer'], arguments['region'], e.message)
         exit_formalalities(message, ST_CR)
 
 
-def calculate_exit_status(elb_object):
+def calculate_exit_status(elb_object, arguments):
     global exit_status
     global health_states
     health_list = elb_object.get_instance_health()
@@ -209,23 +149,23 @@ def calculate_exit_status(elb_object):
         healthy_percentage = 0
     else:
         healthy_percentage = float(healthy_count) * 100.0 / float(total)
-    if healthy_percentage <= critical:
+    if healthy_percentage <= arguments['critical']:
         exit_status = ST_CR
-        message = 'InService count <= %s%% (CR)' % critical
+        message = 'InService count <= %s%% (CR)' % arguments['critical']
         reason_for_alert_list.append(message)
-    elif healthy_percentage <= warning:
+    elif healthy_percentage <= arguments['warning']:
         if exit_status == ST_OK or exit_status == ST_UK:
             exit_status = ST_WR
-        message = 'InService count <= %s%% (WR)' % warning
+        message = 'InService count <= %s%% (WR)' % arguments['warning']
         reason_for_alert_list.append(message)
-    if healthy_count <= criticalcount:
+    if healthy_count <= arguments['criticalcount']:
         exit_status = ST_CR
-        message = 'InService count <= %s(CR)' % criticalcount
+        message = 'InService count <= %s(CR)' % arguments['criticalcount']
         reason_for_alert_list.append(message)
-    elif healthy_count <= warningcount:
+    elif healthy_count <= arguments['warningcount']:
         if exit_status == ST_OK or exit_status == ST_UK:
             exit_status = ST_WR
-        message = 'InService count <= %s(WR)' % warningcount
+        message = 'InService count <= %s(WR)' % arguments['warningcount']
         reason_for_alert_list.append(message)
 
 
@@ -247,30 +187,55 @@ def formatted_message():
     return message
 
 
+def calc_perf_data(arguments):
+    inservice = health_states['InService']
+    total = health_states['Total'] 
+    if total == 0:
+        inservice_percent = 0
+    else:
+        inservice_percent = float(inservice) * 100.0 / float(total)
+    data = "inservice=%s%%;%s;%s" % (
+        inservice_percent, arguments['warning'], arguments['critical']
+    )
+    return data
+
+
+def run():
+    try:
+        arguments = parse_options(OPTIONS, DESCRIPTION, USAGE, VERSION, DEFAULTS)
+        validate_arguments(arguments=arguments)
+        elb_object = fetch_load_balancer(arguments)
+        calculate_exit_status(elb_object, arguments)
+        current_status = formatted_message()
+        perf_data = calc_perf_data(arguments)
+        if len(reason_for_alert_list) > 0:
+            alert_reason = ', '.join(reason_for_alert_list)
+            alert_reason = '. Reason: %s' % alert_reason
+        else:
+            alert_reason = ''
+        # print final message & exit
+        if exit_status == ST_OK:
+            message = 'OK - ELB: %s. %s%s | %s' % (arguments['loadbalancer'],
+                current_status, alert_reason, perf_data)
+        elif exit_status == ST_WR:
+            message = 'WARNING - ELB: %s. %s%s | %s' % (
+                arguments['loadbalancer'], current_status, alert_reason,
+                perf_data)
+        elif exit_status == ST_CR:
+            message = 'CRITICAL - ELB: %s. %s%s | %s' % (
+                arguments['loadbalancer'], current_status, alert_reason,
+                perf_data)
+        else:
+            message = 'UNKNOWN - ELB: %s. %s%s | %s' % (
+                arguments['loadbalancer'], current_status, alert_reason,
+                perf_data)
+        exit_formalalities(message, exit_status=exit_status)
+    except Exception as e:
+        message = "Exception occured - %s" % e.message
+        logger.critical("ELB health check: %s" % message)
+        exit_formalalities(message, exit_status=ST_CR)
+
+
 if __name__ == '__main__':
-    arguments = parse_options()
-    validate_and_use_arguments_passed(arguments=arguments)
-    elb_object = fetch_load_balancer()
-    calculate_exit_status(elb_object)
-    current_status = formatted_message()
-
-    if len(reason_for_alert_list) > 0:
-        alert_reason = ', '.join(reason_for_alert_list)
-        alert_reason = '. Reason: %s' % alert_reason
-    else:
-        alert_reason = ''
-
-    # print final message & exit
-    if exit_status == ST_OK:
-        message = 'OK - ELB: %s. %s%s' % (loadbalancer, current_status,
-                                          alert_reason)
-    elif exit_status == ST_WR:
-        message = 'WARNING - ELB: %s. %s%s' % (loadbalancer, current_status,
-                                               alert_reason)
-    elif exit_status == ST_CR:
-        message = 'CRITICAL - ELB: %s. %s%s' % (loadbalancer, current_status,
-                                                alert_reason)
-    else:
-        message = 'UNKNOWN - ELB: %s. %s%s' % (loadbalancer, current_status,
-                                               alert_reason)
-    exit_formalalities(message, exit_status=exit_status)
+    logger.debug("ELB health check: Script started")
+    run()
