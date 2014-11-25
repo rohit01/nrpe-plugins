@@ -1,0 +1,22 @@
+{{ notification_type }}: {{ host_name }} is {{ state }} ({{ state_type }}). Msg- {{ message }}
+
+Hi {{ name }},
+
+Date and time: {{ long_date_time }}
+Hostname: {{ host_name }} / {{ host_alias }}
+Address: {{ host_address }} / {{ host_private_address }}
+Status: {{ state }}
+Type: {{ state_type }} - {{ attempt_no }}/{{ max_attempt }}
+Duration: {{ duration }}
+Fluctuate percent: {{ percent_changes }}%
+Last check: {{ last_check }} seconds ago
+Host group: {{ host_group }}
+Full message: {{ full_message }}
+
+Web link: http://<shinken-host>/host/{{ host_name | urlencode }}
+
+Best,
+
+Shinken monitoring - 24x7
+I stay awake, so that you can sleep peacefully!
+http://<shinken-host>
