@@ -4,10 +4,10 @@
 # Valid commands: 'show channels count', 'status'
 #
 # Actual fs_cli commands being run to perform checks:
-# show channels count: /usr/local/freeswitch/bin/fs_cli -b -q -x "show channels count" -t 2000
-# status: /usr/local/freeswitch/bin/fs_cli -b -q -x "status" -t 2000
-# pri_metrics: /usr/local/freeswitch/bin/fs_cli -b -q -x "ftdm list" -t 2000
-#              /usr/local/freeswitch/bin/fs_cli -b -q -x "ftdm core calls" -t 2000
+# show channels count: /usr/local/freeswitch/bin/fs_cli -q -x "show channels count" -t 2000
+# status: /usr/local/freeswitch/bin/fs_cli -q -x "status" -t 2000
+# pri_metrics: /usr/local/freeswitch/bin/fs_cli -q -x "ftdm list" -t 2000
+#              /usr/local/freeswitch/bin/fs_cli -q -x "ftdm core calls" -t 2000
 #
 
 AUTHOR="Rohit Gupta - @rohit01"
