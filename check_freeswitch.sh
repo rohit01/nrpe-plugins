@@ -144,7 +144,7 @@ get_pri_perf_data() {
     echo "${span_details}" | grep "^span: " | cut -d" " -f 2 | while read span_no
     do
         live_calls_count="$(echo "${call_details}" | grep " ${span_no}:" | wc -l)"
-        echo "span_${span_no}=${live_calls_count}"
+        echo "span${span_no}=${live_calls_count}"
     done | tr '\n' ' ' | sed 's/ *$//'
 }
 
