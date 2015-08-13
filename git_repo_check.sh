@@ -98,9 +98,9 @@ if [ $? -ne 0 ]; then
 fi
 
 branch_status=""
-if echo "${git_status}" | grep "^On branch ${branch}$" >/dev/null; then
+if echo "${git_status}" | grep "On branch ${branch}$" >/dev/null; then
     branch_status="ok"
-elif echo "${git_status}" | grep "^HEAD detached at ${branch}$" >/dev/null; then
+elif echo "${git_status}" | grep "HEAD detached at ${branch}$" >/dev/null; then
     branch_status="ok"
 fi
 
