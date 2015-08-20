@@ -20,7 +20,6 @@ ST_OK=0
 ST_WR=1
 ST_CR=2
 ST_UK=3
-PRI_HISTORY_FILE="/tmp/._pri_history_${PROGNAME}"
 LAST_CALLS_COUNT_FILE="/tmp/._last_calls_count_${PROGNAME}"
 
 ## Global variables & default settings
@@ -52,14 +51,14 @@ print_help() {
     echo "     Command: "
     echo "        'show channels count': No of channels in use. Default: 300"
     echo "        'show calls count': No of calls in use. Default: 300"
-    echo "        'pri_metrics': No of seconds span is not in use. Default: 300"
+    echo "        'pri_metrics': No of calls per pri line. Default: 300"
     echo "        'calls_count': Zero calls for x duration. Default: 300 secs"
     echo "  -c/--critical)"
     echo "     Defines a critical level. Not applicable for 'status' command"
     echo "     Command: "
     echo "        'show channels count': No of channels in use. Default: 400"
     echo "        'show calls count': No of calls in use. Default: 400"
-    echo "        'pri_metrics': No of seconds span is not in use. Default: 400"
+    echo "        'pri_metrics': No of calls per pri line. Default: 400"
     echo "        'calls_count': Zero calls for x duration. Default: 400 secs"
     echo "  -h/--help)"
     echo "     Print this help message & exit"
@@ -98,52 +97,18 @@ execute_check() {
     check_timeout
 }
 
-update_pri_history_file() {
+pri_utilization_alert() {
     span_details="${1}"
     call_details="${2}"
-    touch "${PRI_HISTORY_FILE}"
-    span_fail_history="$(cat "${PRI_HISTORY_FILE}")"
-    time_now="$(date +%s)"
     echo "${span_details}" | grep "^span: " | cut -d" " -f 2 | while read span_no
     do
-          live_calls_count="$(echo "${call_details}" | grep " ${span_no}:" | wc -l)"
-          if [ "X${live_calls_count}" == "X0" ]; then
-              last_check="$(echo "${span_fail_history}" | grep " ${span_no}$")"
-              if [ "X${last_check}" == "X" ]; then
-                  echo "${time_now} ${span_no}"
-              else
-                  echo "${last_check/ */} ${span_no}"
-              fi
-          fi
-    done | tee "${PRI_HISTORY_FILE}"
-}
-
-calc_pri_alert_level() {
-    span_fail_details="${1}"
-    if [ "X${span_fail_details}" == "X" ]; then
-        exit "${ST_OK}"
-    fi
-    time_now="$(date +%s)"
-    oldest_record="$(echo "${span_fail_details}" | sort -n | head -n 1)"
-    oldest_time_diff="$(expr "${time_now}" - "${oldest_record/ */}")"
-
-    if [ "${oldest_time_diff}" -ge "${critical}" ]; then
-        base_level="${critical}"
-        exit_status="${ST_CR}"
-    elif [ "${oldest_time_diff}" -ge "${warning}" ]; then
-        base_level="${warning}"
-        exit_status="${ST_WR}"
-    else
-        exit "${ST_OK}"
-    fi
-
-    echo "${span_fail_details}" | while read timestamp_span; do
-        time_diff="$(expr "${time_now}" - "${timestamp_span/ */}")"
-        if [ "${time_diff}" -ge "${base_level}" ]; then
-            echo "${timestamp_span/* /}(${time_diff})s"
+        live_calls_count="$(echo "${call_details}" | grep " ${span_no}:" | wc -l)"
+        if [ "${live_calls_count}" -ge "${critical}" ]; then
+            echo "CR:span${span_no}:${live_calls_count}calls"
+        elif [ "${live_calls_count}" -ge "${warning}" ]; then
+            echo "WR:span${span_no}:${live_calls_count}calls"
         fi
     done | tr '\n' ' ' | sed 's/ *$//'
-    exit "${exit_status}"
 }
 
 get_pri_perf_data() {
@@ -343,20 +308,26 @@ elif [ "X${fs_command}" == "Xpri_metrics" ]; then
     execute_check
     call_details="${fscli_output}"
 
-    span_fail_details="$(update_pri_history_file "${span_details}" "${call_details}")"
-    failed_spans="$(calc_pri_alert_level "${span_fail_details}")"
-    exit_status="$?"
-    pri_perf_data="$(get_pri_perf_data "${span_details}" "${call_details}")"
+    pri_excess_utilization="$(pri_utilization_alert "${span_details}" "${call_details}")"
+    # Calculete alert level
+    if echo "${pri_excess_utilization}" | grep "CR:span" >/dev/null; then
+        exit_status="${ST_CR}"
+    elif echo "${pri_excess_utilization}" | grep "WR:span" >/dev/null; then
+        exit_status="${ST_WR}"
+    else
+        exit_status="${ST_OK}"
+    fi
 
+    pri_perf_data="$(get_pri_perf_data "${span_details}" "${call_details}")"
     total_calls="$(echo "${call_details}" | grep -i "^Total calls: ")"
     total_calls="${total_calls/Total calls: /}"
     perf_data="${pri_perf_data} total_calls=${total_calls}"
 
     if [ "X${exit_status}" == "X${ST_CR}" ]; then
-        message="CRITICAL - Total calls: ${total_calls}. No calls in span: ${failed_spans} | ${perf_data}"
+        message="CRITICAL - Total calls: ${total_calls}. High load on PRI- ${pri_excess_utilization} | ${perf_data}"
         exit_formalities "${message}" "${exit_status}"
     elif [ "X${exit_status}" == "X${ST_WR}" ]; then
-        message="WARNING - Total calls: ${total_calls}. No calls in span: ${failed_spans} | ${perf_data}"
+        message="WARNING - Total calls: ${total_calls}. High load on PRI- ${pri_excess_utilization} | ${perf_data}"
         exit_formalities "${message}" "${exit_status}"
     else
         message="OK - Total calls: ${total_calls} | ${perf_data}"
