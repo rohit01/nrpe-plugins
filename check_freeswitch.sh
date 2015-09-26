@@ -6,6 +6,7 @@
 # Actual fs_cli commands being run to perform checks:
 # show channels count: /usr/local/freeswitch/bin/fs_cli -q -x "show channels count" -t 2000
 # show calls count: /usr/local/freeswitch/bin/fs_cli -q -x "show calls count" -t 2000
+# zombie_calls: /usr/local/freeswitch/bin/fs_cli -q -x "show channels" -t 2000
 # status: /usr/local/freeswitch/bin/fs_cli -q -x "status" -t 2000
 # pri_metrics: /usr/local/freeswitch/bin/fs_cli -q -x "ftdm list" -t 2000
 #              /usr/local/freeswitch/bin/fs_cli -q -x "ftdm core calls" -t 2000
@@ -41,7 +42,7 @@ print_help() {
     echo "using fs_cli command."
     echo "Freeswitch status check commands defined in this module are:"
     echo "'show channels count', 'show calls count', 'status', 'pri_metrics', "
-    echo "'pri_status', 'calls_count'"
+    echo "'pri_status', 'calls_count', 'zombie_calls'"
     echo ""
     echo "Usage: $PROGNAME 'show channels count' [-w 80] [-c 90]"
     echo ""
@@ -53,6 +54,7 @@ print_help() {
     echo "        'show calls count': No of calls in use. Default: 300"
     echo "        'pri_metrics': No of calls per pri line. Default: 300"
     echo "        'calls_count': Zero calls for x duration. Default: 300 secs"
+    echo "        'zombie_calls': Number of zombie calls in percent"
     echo "  -c/--critical)"
     echo "     Defines a critical level. Not applicable for 'status' command"
     echo "     Command: "
@@ -60,6 +62,7 @@ print_help() {
     echo "        'show calls count': No of calls in use. Default: 400"
     echo "        'pri_metrics': No of calls per pri line. Default: 400"
     echo "        'calls_count': Zero calls for x duration. Default: 400 secs"
+    echo "        'zombie_calls': Number of zombie calls (in percent)"
     echo "  -h/--help)"
     echo "     Print this help message & exit"
     echo "  -v/--version)"
@@ -70,6 +73,7 @@ print_help() {
     echo "   $PROGNAME 'show channels count' -w 500 -c 650"
     echo "   $PROGNAME 'show calls count' -w 500 -c 650"
     echo "   $PROGNAME 'pri_metrics' -w 600 -c 900"
+    echo "   $PROGNAME 'zombie_calls' -w 25 -c 50"
 }
 
 exit_formalities() {
@@ -204,7 +208,7 @@ esac
 if [ "X${fs_command}" == "X" ]; then
     echo "Status check command not specified. Valid commands are: "
     echo "'show channels count', 'show calls count', 'pri_metrics', 'status',"
-    echo " 'pri_status' & 'calls_count'"
+    echo " 'pri_status', 'zombie_calls' & 'calls_count'"
     echo "Use -h/--help option to get more details"
     exit_formalities "${message}" "${ST_UK}"
 elif [ "X${fs_command}" != "Xstatus" ] && \
@@ -212,10 +216,11 @@ elif [ "X${fs_command}" != "Xstatus" ] && \
         [ "X${fs_command}" != "Xshow calls count" ] && \
         [ "X${fs_command}" != "Xpri_status" ] && \
         [ "X${fs_command}" != "Xcalls_count" ] && \
+        [ "X${fs_command}" != "Xzombie_calls" ] && \
         [ "X${fs_command}" != "Xpri_metrics" ]; then
     echo "Invalid command - '${fs_command}'. Valid commands are: "
     echo "'show channels count', 'show calls count', 'pri_metrics', "
-    echo "'pri_status', 'calls_count' & 'status'"
+    echo "'pri_status', 'calls_count', 'zombie_calls' & 'status'"
     echo "Use -h/--help option to get more details"
     exit_formalities "${message}" "${ST_UK}"
 fi
@@ -355,4 +360,25 @@ elif [ "X${fs_command}" == "Xcalls_count" ]; then
     message="$(calls_count_alert_summary "${no_of_calls}")"
     exit_status="$?"
     exit_formalities "${message}" "${exit_status}"
+
+elif [ "X${fs_command}" == "Xzombie_calls" ]; then
+    ## Execute check to find the number of zombie_calls
+    fs_command="show channels"
+    execute_check
+    channels="$(echo "${fscli_output}" | head -n -2 | awk 'NR>=2')"
+    time_now="$(date +%s)"
+    channels_count="$(echo "${channels}" | wc -l)"
+    zombie_count="$(echo "${channels}" | awk -F  "," '{if ($4 <= ('${time_now}' - 180) && $6 == "CS_CONSUME_MEDIA" && $25 == "ACTIVE") print}' | wc -l)"
+    zombie_percent="$((zombie_count * 100 / channels_count))"
+    perf_data="zombie=${zombie_percent}%;${warning}%;${critical}% zombiecount=${zombie_count} channels=${channels_count}"
+    if [ "${zombie_percent}" -ge "${critical}" ]; then
+        message="CRITICAL - Zombie calls: ${zombie_count} / ${channels_count} (${zombie_percent}%) | ${perf_data}"
+        exit_formalities "${message}" "${ST_CR}"
+    elif [ "${zombie_percent}" -ge "${warning}" ]; then
+        message="WARNING - Zombie calls: ${zombie_count} / ${channels_count} (${zombie_percent}%) | ${perf_data}"
+        exit_formalities "${message}" "${ST_WR}"
+    else
+        message="OK - Zombie calls: ${zombie_count} / ${channels_count} (${zombie_percent}%) | ${perf_data}"
+        exit_formalities "${message}" "${ST_OK}"
+    fi
 fi
