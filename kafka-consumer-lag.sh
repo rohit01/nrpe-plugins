@@ -213,6 +213,9 @@ if [ "${ctype}" == "new" ]; then
     elif echo "${c_details}" | grep "^Error: Executing consumer group command failed due to Error reading field 'version': java.nio.BufferUnderflowException" >/dev/null; then
         echo_details "WARNING- fetch error. ${c_details}"
         exit "${ST_WR}"
+    elif echo "${c_details}" | grep "^Error: Consumer group '[a-zA-Z0-9_-]*' does not exist" >/dev/null; then
+        echo_details "WARNING- fetch error. ${c_details}"
+        exit "${ST_WR}"
     elif echo "${c_details}" | grep "^Error: " >/dev/null; then
         echo_details "CRITICAL- fetch error. ${c_details}"
         exit "${ST_CR}"
