@@ -191,7 +191,7 @@ calculate_consumer_lag() {
   if [ "${ctype}" == "new" ]; then
     expression="$(echo "$1" | grep -v -e "^TOPIC\s" -e "^Group\s" -e "is rebalancing" -e "^\s*$" | awk '{print $5}' | grep -v -e "^\s*$" -e "^\s*-[0-9]*\s*$" | tr "\n" "+" | sed 's/+$/\n/')"
   else
-    expression="$(echo "$1" | grep -v -e "^TOPIC\s" -e "^Group\s" -e "is rebalancing" -e "^\s*$" | awk '{print $6}' | grep -v -e "^\s*$" -e "^\s*-[0-9]*\s*$" | tr "\n" "+" | sed 's/+$/\n/')"
+    expression="$(echo "$1" | grep -v -e "^TOPIC\s" -e "^Group\s" -e "is rebalancing" -e 'org.apache.zookeeper.KeeperException$NoNodeException' -e "^\s*$" | awk '{print $6}' | grep -v -e "^\s*$" -e "^\s*-[0-9]*\s*$" | tr "\n" "+" | sed 's/+$/\n/')"
   fi
   if [ "${expression}" == "" ]; then
     echo_details "WARNING- no numeric lag value found for lag calculation"
